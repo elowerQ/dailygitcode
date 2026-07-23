@@ -744,7 +744,7 @@ async function ensureValidToken(accessToken, refreshToken, username) {
   if (remainingHours > REFRESH_THRESHOLD_HOURS) {
     // 有效期充足，无需刷新
     console.log(
-      '[Token检查] access_token 剩余有效期: ' +
+      '🔑 Token 剩余 ' +
       remainingHours.toFixed(1) + ' 小时（无需刷新）'
     );
     return accessToken;
@@ -1497,7 +1497,7 @@ async function processFileUpdate(fileHeaders, repo, projectId, username) {
  */
 async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo, accountIndex) {
   console.log('');
-  console.log('[每日任务] 开始执行每日任务...');
+  console.log('  │ 🎯 开始执行每日任务...');
 
   // 检查 Cookie 串是否包含 WAF Cookie
   var cookieStr = auth.cookieStr || '';
@@ -1527,7 +1527,7 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
   var task77Score = 10;
 
   // 步骤1：查询任务列表（不需要 WAF Cookie，始终执行）
-  console.log('[每日任务] 查看任务列表...');
+  console.log('  │ 📋 查询任务列表...');
   try {
     taskList = await getTaskList(signHeaders);
   } catch (e) {
@@ -1559,7 +1559,7 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
     // 步骤A：每日分享（触发 task 77，不需要 WAF Cookie）
     if (task77 && task77.status === 2) {
       console.log('');
-      console.log('[每日分享] POST /uc/api/v1/invite/generate...');
+      console.log('  │ 📤 生成分享邀请...');
       // 分享接口使用 PC UA + X-Platform: web，不需要 WAF Cookie
       var shareHeaders = {
         'Authorization': 'Bearer ' + accessToken,
@@ -1578,7 +1578,7 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
           task77Triggered = true;
           task77Code = inviteCode;
           console.log('  邀请码: ' + inviteCode);
-          console.log('[每日分享] task 77 已触发（待领取 +' + task77Score + ' 积分）');
+            console.log('  │ 📤 分享已触发 (+' + task77Score + ' 积分)');
         }
       } catch (e) {
         console.log('  [每日分享] 请求异常: ' + e.message);
@@ -1732,62 +1732,58 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
 
   // 输出每日任务汇总
   console.log('');
-  console.log('[每日任务汇总]');
+  console.log('  ┌─ 任务汇总 ─────────────────────────┐');
 
   // task 59 汇总
   var task59 = taskList ? findTask(taskList, 59) : null;
   if (task59Triggered) {
-    console.log('  ✅ task 59 每日查看热门/推荐项目: +' + task59Score + ' 分');
-  } else if (task59 && task59.status === 1) {
-    console.log('  ✅ task 59 每日查看热门/推荐项目: 已完成');
-  } else if (task59 && task59.status === 0) {
-    console.log('  ✅ task 59 每日查看热门/推荐项目: 待领取');
+    console.log('  │ 🔍 查看热门    ✅ +' + task59Score + ' 分                     │');
+  } else if (task59 && (task59.status === 1 || task59.status === 0)) {
+    console.log('  │ 🔍 查看热门    ✅ 已完成                    │');
   } else if (task59) {
-    console.log('  ❌ task 59 每日查看热门/推荐项目: 未完成');
+    console.log('  │ 🔍 查看热门    ❌ 未完成                    │');
   } else if (!wafAvailable) {
-    console.log('  ⏭️ task 59 每日查看热门/推荐项目: 跳过（无 WAF Cookie）');
+    console.log('  │ 🔍 查看热门    ⏭️ 跳过(无WAF)               │');
   } else {
-    console.log('  ❌ task 59 每日查看热门/推荐项目: 未完成');
+    console.log('  │ 🔍 查看热门    ❌ 未完成                    │');
   }
 
   // task 62 汇总
   var task62 = taskList ? findTask(taskList, 62) : null;
   if (task62Triggered) {
-    console.log('  ✅ task 62 每日Star一个项目: +' + task62Score + ' 分');
-  } else if (task62 && task62.status === 1) {
-    console.log('  ✅ task 62 每日Star一个项目: 已完成');
-  } else if (task62 && task62.status === 0) {
-    console.log('  ✅ task 62 每日Star一个项目: 待领取');
+    console.log('  │ ⭐ Star项目    ✅ +' + task62Score + ' 分                     │');
+  } else if (task62 && (task62.status === 1 || task62.status === 0)) {
+    console.log('  │ ⭐ Star项目    ✅ 已完成                    │');
   } else if (task62) {
-    console.log('  ❌ task 62 每日Star一个项目: 未完成');
+    console.log('  │ ⭐ Star项目    ❌ 未完成                    │');
   } else if (!wafAvailable) {
-    console.log('  ⏭️ task 62 每日Star一个项目: 跳过（无 WAF Cookie）');
+    console.log('  │ ⭐ Star项目    ⏭️ 跳过(无WAF)               │');
   } else {
-    console.log('  ❌ task 62 每日Star一个项目: 未完成');
+    console.log('  │ ⭐ Star项目    ❌ 未完成                    │');
   }
 
   // task 77 汇总
   var task77Summary = taskList ? findTask(taskList, 77) : null;
   if (task77Triggered) {
-    console.log('  ✅ task 77 每日分享: +' + task77Score + ' 分（邀请码: ' + task77Code + '）');
-  } else if (task77Summary && task77Summary.status === 1) {
-    console.log('  ✅ task 77 每日分享: 已完成');
-  } else if (task77Summary && task77Summary.status === 0) {
-    console.log('  ✅ task 77 每日分享: 待领取');
+    console.log('  │ 📤 每日分享    ✅ +' + task77Score + ' 分                     │');
+  } else if (task77Summary && (task77Summary.status === 1 || task77Summary.status === 0)) {
+    console.log('  │ 📤 每日分享    ✅ 已完成                    │');
   } else if (task77Summary) {
-    console.log('  ❌ task 77 每日分享: 未完成');
+    console.log('  │ 📤 每日分享    ❌ 未完成                    │');
   }
 
   // 文件更新汇总
   if (repo && repo.length > 0) {
-    console.log('  📝 每日更新项目文件: 已执行（仓库: ' + repo + '）');
+    console.log('  │ 📝 更新README  ✅ 已执行                    │');
   } else {
-    console.log('  ⏭️ 每日更新项目文件: 跳过（未配置 GITCODE_REPO）');
+    console.log('  │ 📝 更新README  ⏭️ 未配置                    │');
   }
 
+  console.log('  ├────────────────────────────────────┤');
   console.log(
-    '  今日获得: +' + totalGained + ' 分（当前总积分: ' + scoreAfter + '）'
+    '  │ 🎁 今日获得: +' + totalGained + ' 分  |  总积分: ' + scoreAfter + '             │'
   );
+  console.log('  └────────────────────────────────────┘');
 }
 
 // ============================================================
@@ -1814,7 +1810,7 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
  */
 async function processAccount(auth, accountIndex, projectId, repo) {
   var displayName = auth.username || ('账号' + accountIndex);
-  console.log('\n========== 账号 ' + accountIndex + ': ' + displayName + ' ==========');
+  console.log('\n┌─ 账号' + accountIndex + ': ' + displayName);
 
   // 步骤0：检查并刷新 Token
   var accessToken = await ensureValidToken(
@@ -1824,7 +1820,7 @@ async function processAccount(auth, accountIndex, projectId, repo) {
   var headers = buildHeaders(accessToken, auth.username);
 
   // 步骤1：查询用户信息（验证 token）
-  console.log('[步骤1] 查询用户信息...');
+  console.log('  │ ✏️  查询用户信息...');
   var userInfoBefore = null;
   try {
     userInfoBefore = await getUserInfo(headers);
@@ -1850,7 +1846,7 @@ async function processAccount(auth, accountIndex, projectId, repo) {
   console.log('  当前等级: Lv.' + level + (nextLevel > 0 ? ' (下一级需 ' + nextLevel + ' 成长值)' : ''));
 
   // 步骤2：查询签到状态
-  console.log('[步骤2] 查询签到状态...');
+  console.log('  │ 🔖 查询签到状态...');
   var signStatusBefore = null;
   try {
     signStatusBefore = await getSignStatus(headers);
@@ -1870,14 +1866,12 @@ async function processAccount(auth, accountIndex, projectId, repo) {
   var todayScore = scoresArr[awardIndex] || 0;
   var weekdayName = WEEKDAY_NAMES[awardIndex] || ('第' + (awardIndex + 1) + '天');
 
-  console.log('  今日签到奖励: ' + todayScore + ' 积分 (' + weekdayName + ')');
-  console.log('  本周签到奖励: ' + JSON.stringify(scoresArr));
-
   if (alreadySignedIn) {
-    console.log('[结果] 今日已签到，无需重复签到');
+    console.log('  │ 🔖 今日已签到 ✓');
+    console.log('  │ ' + todayScore + ' 积分 (' + weekdayName + ')');
   } else {
     // 步骤3：执行签到
-    console.log('[步骤3] 今日尚未签到，正在执行签到...');
+    console.log('  │ ✍️  正在签到...');
     var signInSuccess = false;
     try {
       signInSuccess = await doSignIn(headers);
@@ -1894,7 +1888,7 @@ async function processAccount(auth, accountIndex, projectId, repo) {
     console.log('  签到请求已发送（HTTP 200）');
 
     // 步骤4：签到后查询状态和积分
-    console.log('[步骤4] 查询签到结果...');
+    console.log('  │ 📊 查询签到结果...');
 
     // 等待 1 秒让服务端处理完成
     await new Promise(function (resolve) { setTimeout(resolve, 1000); });
@@ -1923,13 +1917,11 @@ async function processAccount(auth, accountIndex, projectId, repo) {
       var scoreAfter = userInfoAfter.score || 0;
       var scoreGained = scoreAfter - scoreBefore;
       console.log('');
-      console.log('  ========== 签到结果 ==========');
-      console.log('  签到状态: 成功');
-      console.log('  获得积分: +' + (scoreGained > 0 ? scoreGained : todayScore));
-      console.log('  当前总积分: ' + scoreAfter);
-      console.log('  当前成长值: ' + (userInfoAfter.growth || 0));
-      console.log('  当前等级: Lv.' + (userInfoAfter.level || level));
-      console.log('  ==============================');
+      console.log('  ┌─ 签到结果 ─────────────────────────┐');
+      console.log('  │ 状态: ✅ 成功                      │');
+      console.log('  │ 获得: +' + (scoreGained > 0 ? scoreGained : todayScore) + ' 积分                          │');
+      console.log('  │ 总积分: ' + scoreAfter + '   成长值: ' + (userInfoAfter.growth || 0) + '   等级: Lv.' + (userInfoAfter.level || level) + ' │');
+      console.log('  └────────────────────────────────────┘');
     } else {
       console.log('  [结果] 签到已完成（预计获得 ' + todayScore + ' 积分）');
     }
@@ -2029,11 +2021,11 @@ function getRepos() {
  * 读取环境变量，解析多账号，依次执行签到 + 每日任务。
  */
 async function main() {
-  console.log('========================================');
-  console.log('  GitCode 每日签到脚本 V4.1');
-  console.log('  签到 + Refresh Token + 每日任务（分享/查看/Star） + 文件更新');
-  console.log('  时间: ' + new Date().toLocaleString('zh-CN'));
-  console.log('========================================');
+  console.log('╔══════════════════════════════════════╗');
+  console.log('║   GitCode 每日签到  V4.1            ║');
+  console.log('║   签到 + 刷新 + 分享/查看/Star + 更新 ║');
+  console.log('║   ' + new Date().toLocaleString('zh-CN') + '          ║');
+  console.log('╚══════════════════════════════════════╝');
 
   // 读取环境变量（兼容青龙面板多种变量名）
   var envCookie =
@@ -2103,7 +2095,7 @@ async function main() {
   for (var i = 0; i < accountStrs.length; i++) {
     var auth = parseAuthToken(accountStrs[i]);
     if (!auth) {
-      console.log('\n========== 账号 ' + (i + 1) + ': [解析失败] ==========');
+      console.log('\n┌─ 账号' + (i + 1) + ': [解析失败] ─────────────────┐');
       console.log('  [错误] 无法解析 Token，请检查格式');
       failCount++;
       continue;
@@ -2136,12 +2128,11 @@ async function main() {
 
   // 汇总
   console.log('');
-  console.log('========================================');
-  console.log('  执行完毕');
-  console.log('  成功: ' + successCount + ' 个账号');
-  console.log('  失败: ' + failCount + ' 个账号');
-  console.log('  时间: ' + new Date().toLocaleString('zh-CN'));
-  console.log('========================================');
+  console.log('╔══════════════════════════════════════╗');
+  console.log('║   执行完毕 ✅                        ║');
+  console.log('║   成功: ' + successCount + '  失败: ' + failCount + '                         ║');
+  console.log('║   ' + new Date().toLocaleString('zh-CN') + '          ║');
+  console.log('╚══════════════════════════════════════╝');
 }
 
 // 执行主函数
