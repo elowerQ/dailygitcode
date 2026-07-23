@@ -1,5 +1,5 @@
 /**
- * GitCode 每日签到脚本 V4（青龙面板版）—— 签到 + Refresh Token 刷新 + 每日任务自动化 + 每日更新项目文件
+ * GitCode 每日签到脚本 V4.2（青龙面板版）—— 签到 + Refresh Token 刷新 + 每日任务全自动化 + 每日更新项目文件
  *
  * 功能：
  *   - 自动查询签到状态，若未签到则执行签到
@@ -29,8 +29,10 @@
  * V4.1 新增：
  *   - 每日分享自动化（自动触发 task 77，+10 积分）
  *   - 分享接口 POST /uc/api/v1/invite/generate（不需要 WAF Cookie）
- *   - 每日任务流程升级：签到 → 分享 → 查看项目 → Star项目 → 更新项目文件 → 领取奖励
  *   - 4 大红框任务全部攻克！✅ task 59 ✅ task 62 ✅ task 77 ✅ 文件更新
+ *
+ * V4.2 新增：
+ *   - 日志美化：框线风格 + emoji + 对齐排版
  *
  * 环境变量：
  *   GITCODE_COOKIE —— 支持以下格式（自动识别）：
@@ -60,7 +62,7 @@
  *   30 8 * * *
  *
  * @author GitCode Check-in Bot
- * @version 4.1.0
+ * @version 4.2.0
  */
 
 // cron: 30 8 * * *
@@ -2022,7 +2024,7 @@ function getRepos() {
  */
 async function main() {
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   GitCode 每日签到  V4.1            ║');
+  console.log('║   GitCode 每日签到  V4.2            ║');
   console.log('║   签到 + 刷新 + 分享/查看/Star + 更新 ║');
   console.log('║   ' + new Date().toLocaleString('zh-CN') + '          ║');
   console.log('╚══════════════════════════════════════╝');
