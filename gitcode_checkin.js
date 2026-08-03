@@ -116,6 +116,10 @@ const API_REPORT = '/api/v1/report?event_id=page_click';
 /** task 77 触发上报的按钮名（复制邀请链接） */
 const SHARE_BUTTON_NAME = '常规邀请_复制邀请链接_PC';
 
+/** task 59 触发上报的事件（V4.3 新增：记录项目浏览 + 页面浏览） */
+const API_REPORT_VIEW = '/api/v1/report?event_id=record_saved';
+const API_PAGEVIEW = '/api/v1/report?event_id=pageview';
+
 /** 项目接口基础路径（api/v2/projects/） */
 const API_PROJECTS_BASE = '/api/v2/projects/';
 
@@ -1627,52 +1631,46 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
     // 等待 1 秒，让服务端处理
     await new Promise(function (resolve) { setTimeout(resolve, 1000); });
 
-    if (wafAvailable) {
-      // 构建项目接口请求头（PC 浏览器环境，需要 WAF Cookie）
-      var projectHeaders = buildProjectHeaders(accessToken, cookieStr, auth.username);
-
-      // 步骤B：查看项目（触发 task 59）
-      if (task59 && task59.status === 2) {
-        console.log('');
-        console.log('[查看项目] GET /api/v2/projects/' + projectId + '...');
-        try {
-          var projectInfo = await viewProject(projectId, projectHeaders);
-          if (projectInfo) {
-            var projName = projectInfo.path_with_namespace ||
-                           projectInfo.name_with_namespace ||
-                           projectInfo.name ||
-                           projectInfo.path ||
-                           ('项目#' + projectId);
-            var projDesc = projectInfo.description || '无描述';
-            var projStarCount = projectInfo.star_count || 0;
-            var projForksCount = projectInfo.forks_count || 0;
-            console.log('  项目: ' + projName);
-            console.log('  描述: ' + projDesc);
-            console.log('  Star数: ' + projStarCount + (projForksCount > 0 ? '  Fork数: ' + projForksCount : ''));
-            // 等待服务端处理后重新验证任务状态（V4.3 新增，避免假成功）
-            await new Promise(function (resolve) { setTimeout(resolve, 1000); });
-            var verified59 = await verifyTaskTriggered(signHeaders, 59);
-            if (verified59) {
-              task59Triggered = true;
-              console.log('  │ 🔍 查看热门已触发 ✓ (+' + task59Score + ' 积分)');
-            } else {
-              console.log('  │ ⚠️ 项目已查看但 task 59 未触发（触发接口可能已变更）');
-            }
+    // 步骤B：每日查看热门项目（触发 task 59，V4.3 修复）
+    // 上报接口不需要 WAF Cookie，仅需 access_token。
+    if (task59 && task59.status === 2) {
+      console.log('');
+      console.log('  │ 🔍 上报查看项目行为...');
+      var viewHeaders = {
+        'Authorization': 'Bearer ' + accessToken,
+        'Content-Type': 'application/json',
+        'User-Agent': PC_USER_AGENT,
+        'Referer': 'https://gitcode.com/',
+        'Origin': GITCODE_SITE,
+        'X-App-Channel': 'gitcode-fe',
+        'page-uri': 'https%3A%2F%2Fgitcode.com%2FQQ111QQ%2Fcodex%3Fsource_module%3Dhome_hot_selection',
+      };
+      try {
+        var v1 = await postRequest(API_REPORT_VIEW, viewHeaders, { project_id: parseInt(projectId, 10) });
+        var v2 = await postRequest(API_PAGEVIEW, viewHeaders, {});
+        var viewOk = v1.statusCode === 200 || v2.statusCode === 200;
+        if (viewOk) {
+          await new Promise(function (resolve) { setTimeout(resolve, 1500); });
+          var verified59 = await verifyTaskTriggered(signHeaders, 59);
+          if (verified59) {
+            task59Triggered = true;
+            console.log('  │ 🔍 查看热门已触发 ✓ (+' + task59Score + ' 积分)');
           } else {
-            console.log('  [查看项目] 获取项目详情失败');
-          }
-        } catch (e) {
-          console.log('  [查看项目] 请求异常: ' + e.message);
-          if (e.message && e.message.indexOf('WAF') !== -1) {
-            console.log('  [查看项目] 可能是 WAF Cookie 已过期，请重新获取完整 Cookie 串');
+            console.log('  │ ⚠️ 上报成功但 task 59 未触发（触发接口可能已变更）');
           }
         }
-      } else if (task59) {
-        console.log('[查看项目] task 59 状态为 ' + getTaskStatusText(task59.status) + '，跳过');
+      } catch (e) {
+        console.log('  [查看项目] 上报异常: ' + e.message);
       }
+    } else if (task59) {
+      console.log('  │ 🔍 查看热门: ' + getTaskStatusText(task59.status) + '，跳过');
+    }
 
-      // 等待 1 秒，让服务端处理
-      await new Promise(function (resolve) { setTimeout(resolve, 1000); });
+    // 等待 1 秒
+    await new Promise(function (resolve) { setTimeout(resolve, 1000); });
+
+    if (wafAvailable) {
+      var projectHeaders = buildProjectHeaders(accessToken, cookieStr, auth.username);
 
       // 步骤C：Star 项目（触发 task 62）
       if (task62 && task62.status === 2) {
@@ -1729,9 +1727,9 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
   }
 
   if (!wafAvailable) {
-    console.log('[每日任务] 未检测到 WAF Cookie（HWWAFSESID 等），跳过查看项目和Star项目');
-    console.log('[每日任务] 提示: 每日任务（查看项目、Star项目）需要完整 Cookie 串');
-    console.log('[每日任务]       每日分享、文件更新和领取奖励不受影响（不需要 WAF Cookie）');
+    console.log('[每日任务] 未检测到 WAF Cookie（HWWAFSESID 等），跳过 Star 项目（task 62）');
+    console.log('[每日任务] 提示: Star项目 需要完整 Cookie 串（含 WAF Cookie）');
+    console.log('[每日任务]       分享（task 77）、查看热门（task 59）、文件更新和领取奖励不受影响');
   }
 
   // 步骤C（V4新增）：更新项目文件（不需要 WAF Cookie）
