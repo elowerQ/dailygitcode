@@ -259,6 +259,17 @@ function pad2(n) {
 }
 
 /**
+ * 右填充空格到指定宽度（用于框线对齐）。
+ * @param {*} s 要填充的字符串
+ * @param {number} w 目标宽度
+ * @return {string} 填充后的字符串
+ */
+function padStr(s, w) {
+  s = String(s);
+  return s.length >= w ? s : s + ' '.repeat(w - s.length);
+}
+
+/**
  * 格式化日期为 "YYYY-MM-DD HH:mm" 格式。
  *
  * @param {Date} date 日期对象
@@ -1888,11 +1899,9 @@ async function processAccount(auth, accountIndex, projectId, repo) {
   var growthBefore = userInfoBefore.growth || 0;
   var level = userInfoBefore.level || 1;
   var nextLevel = userInfoBefore.next_level || 0;
-  console.log('  用户名: ' + (userInfoBefore.username || displayName));
-  console.log('  昵称: ' + (userInfoBefore.nickname || '未知'));
-  console.log('  当前积分: ' + scoreBefore);
-  console.log('  当前成长值: ' + growthBefore);
-  console.log('  当前等级: Lv.' + level + (nextLevel > 0 ? ' (下一级需 ' + nextLevel + ' 成长值)' : ''));
+  console.log('  │ 👤 ' + (userInfoBefore.username || displayName) +
+    '  ⭐' + scoreBefore + '  🌱' + growthBefore +
+    '  Lv.' + level + (nextLevel > 0 ? '(→' + nextLevel + ')' : ''));
 
   // 步骤2：查询签到状态
   console.log('  │ 🔖 查询签到状态...');
@@ -1916,11 +1925,9 @@ async function processAccount(auth, accountIndex, projectId, repo) {
   var weekdayName = WEEKDAY_NAMES[awardIndex] || ('第' + (awardIndex + 1) + '天');
 
   if (alreadySignedIn) {
-    console.log('  │ 🔖 今日已签到 ✓');
-    console.log('  │ ' + todayScore + ' 积分 (' + weekdayName + ')');
+    console.log('  │ ✅ ' + todayScore + ' 积分 · ' + weekdayName + ' · 已签到');
   } else {
-    // 步骤3：执行签到
-    console.log('  │ ✍️  正在签到...');
+    console.log('  │ ✍️  正在签到 (' + todayScore + ' 积分 · ' + weekdayName + ')...');
     var signInSuccess = false;
     try {
       signInSuccess = await doSignIn(headers);
@@ -1934,42 +1941,26 @@ async function processAccount(auth, accountIndex, projectId, repo) {
       return false;
     }
 
-    console.log('  签到请求已发送（HTTP 200）');
+    // 等待服务端处理
+    await new Promise(function (resolve) { setTimeout(resolve, 1500); });
 
-    // 步骤4：签到后查询状态和积分
-    console.log('  │ 📊 查询签到结果...');
-
-    // 等待 1 秒让服务端处理完成
-    await new Promise(function (resolve) { setTimeout(resolve, 1000); });
-
-    var signStatusAfter = null;
-    try {
-      signStatusAfter = await getSignStatus(headers);
-    } catch (e) {
-      console.log('  [警告] 签到后查询状态失败: ' + e.message);
-    }
-
-    if (signStatusAfter && signStatusAfter.is_sign_in === true) {
-      console.log('  签到状态确认: 已签到');
-    } else if (signStatusAfter) {
-      console.log('  [警告] 签到后状态仍为未签到，可能签到未生效');
-    }
-
+    // 签到后查询状态
     var userInfoAfter = null;
     try {
       userInfoAfter = await getUserInfo(headers);
     } catch (e) {
-      console.log('  [警告] 签到后查询积分失败: ' + e.message);
+      console.log('  [警告] 查询积分失败: ' + e.message);
     }
 
     if (userInfoAfter) {
       var scoreAfter = userInfoAfter.score || 0;
       var scoreGained = scoreAfter - scoreBefore;
+      var gainedStr = '+' + (scoreGained > 0 ? scoreGained : todayScore);
       console.log('');
-      console.log('  ┌─ 签到结果 ─────────────────────────┐');
-      console.log('  │ 状态: ✅ 成功                      │');
-      console.log('  │ 获得: +' + (scoreGained > 0 ? scoreGained : todayScore) + ' 积分                          │');
-      console.log('  │ 总积分: ' + scoreAfter + '   成长值: ' + (userInfoAfter.growth || 0) + '   等级: Lv.' + (userInfoAfter.level || level) + ' │');
+      console.log('  ┌────────────────────────────────────┐');
+      console.log('  │  ✅ 签到成功                       │');
+      console.log('  │  ' + padStr(gainedStr, 7) + ' 积分  ·  ' + padStr('⭐' + scoreAfter, 10) + '总积分  │');
+      console.log('  │  成长 ' + padStr('' + (userInfoAfter.growth || 0), 5) + '  ·  ' + padStr('Lv.' + (userInfoAfter.level || level), 8) + '      │');
       console.log('  └────────────────────────────────────┘');
     } else {
       console.log('  [结果] 签到已完成（预计获得 ' + todayScore + ' 积分）');
