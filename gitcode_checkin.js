@@ -1,5 +1,5 @@
 /**
- * GitCode 每日签到脚本 V4.2（青龙面板版）—— 签到 + Refresh Token 刷新 + 每日任务全自动化 + 每日更新项目文件
+ * GitCode 每日签到脚本 V4.3（青龙面板版）—— 签到 + Refresh Token 刷新 + 每日任务全自动化 + 每日更新项目文件
  *
  * 功能：
  *   - 自动查询签到状态，若未签到则执行签到
@@ -34,6 +34,13 @@
  * V4.2 新增：
  *   - 日志美化：框线风格 + emoji + 对齐排版
  *
+ * V4.3 修复（重要）：
+ *   - 修复 task 77 每日分享"假触发"：旧方案 invite/generate 只取回已有邀请码，
+ *     不触发任务；真实触发点是行为上报 POST /api/v1/report
+ *     （event_id=page_click, button_name=常规邀请_复制邀请链接_PC），已实测验证
+ *   - 新增触发后验证：每个任务动作执行后重新查询任务状态，
+ *     只有服务端确认触发才报"已触发 ✓"，否则提示"未触发（接口可能已变更）"
+ *
  * 环境变量：
  *   GITCODE_COOKIE —— 支持以下格式（自动识别）：
  *     1. 完整 Cookie 字符串（推荐，支持每日任务 + 自动刷新）：
@@ -62,7 +69,7 @@
  *   30 8 * * *
  *
  * @author GitCode Check-in Bot
- * @version 4.2.0
+ * @version 4.3.0
  */
 
 // cron: 30 8 * * *
@@ -100,8 +107,14 @@ const API_TASK_LIST =
 /** 领取所有奖励接口 */
 const API_CLAIM_ALL = '/uc/api/v1/task/claim-all';
 
-/** 每日分享接口 */
+/** 每日分享接口（旧方案，仅取回已有邀请码，无法触发任务） */
 const API_INVITE_GENERATE = '/uc/api/v1/invite/generate';
+
+/** 行为上报接口（V4.3 新增：task 77 每日分享的真实触发点） */
+const API_REPORT = '/api/v1/report?event_id=page_click';
+
+/** task 77 触发上报的按钮名（复制邀请链接） */
+const SHARE_BUTTON_NAME = '常规邀请_复制邀请链接_PC';
 
 /** 项目接口基础路径（api/v2/projects/） */
 const API_PROJECTS_BASE = '/api/v2/projects/';
@@ -1057,39 +1070,55 @@ async function claimAllRewards(headers) {
 }
 
 /**
- * 调用每日分享接口生成邀请码（触发 task 77 "每日分享"）。
+ * 通过行为上报接口触发 task 77 "每日分享"（V4.3 修复）。
  *
- * 接口：POST /uc/api/v1/invite/generate
- * 请求头：Authorization: Bearer <access_token> + PC UA + Content-Type: application/json
- *        + Origin: https://gitcode.com + Referer: https://gitcode.com/ + X-Platform: web
- * 请求体：{}
- * 响应：{"invite_code": "CM8EEH6L", "start_time": "...", "end_time": "..."} HTTP 200
+ * 背景：旧方案调用 POST /uc/api/v1/invite/generate 只能取回已有的邀请码
+ * （每次返回同一个 code），并不会触发分享任务。
+ * 经抓包验证，真实触发点是前端点击"复制邀请链接"时的行为上报：
  *
- * ⚠️ 不需要 Cookie/WAF Cookie！跟签到接口一样只用 access_token。
- *    但需要 PC UA（非小程序 UA），因为 X-Platform: web。
+ * 接口：POST /api/v1/report?event_id=page_click
+ * 请求体：{"button_name": "常规邀请_复制邀请链接_PC"}
+ * 请求头：Authorization + PC UA + X-Platform: web + X-App-Channel: gitcode-fe
+ *        + Referer: https://gitcode.com/setting/points?type=invite
  *
- * @param {Object} headers 请求头（需包含 PC UA + X-Platform: web）
- * @return {Promise<string|null>} 邀请码（invite_code），失败返回 null
+ * ⚠️ 不需要 Cookie/WAF Cookie！只需 access_token。
+ *    已实测：调用后 task 77 status 从 2（未完成）变为 0（待领取）。
+ *
+ * @param {Object} headers 请求头（需包含 Authorization + PC UA）
+ * @return {Promise<boolean>} 上报是否成功（HTTP 200）
  */
-async function generateInvite(headers) {
-  var resp = await postRequest(API_INVITE_GENERATE, headers, {});
+async function reportShareClick(headers) {
+  var resp = await postRequest(API_REPORT, headers, { button_name: SHARE_BUTTON_NAME });
   if (resp.statusCode !== 200) {
-    console.log('  [每日分享] 请求失败，HTTP ' + resp.statusCode);
+    console.log('  [每日分享] 上报失败，HTTP ' + resp.statusCode);
     if (resp.raw && resp.raw.length > 0) {
       console.log('  [每日分享] 响应内容: ' + resp.raw.substring(0, 200));
     }
-    return null;
+    return false;
   }
-  if (!resp.json) {
-    console.log('  [每日分享] 响应体为空或非 JSON');
-    return null;
+  return true;
+}
+
+/**
+ * 重新查询任务列表，验证指定任务是否已被触发（V4.3 新增）。
+ *
+ * 用于在任务动作执行后确认真实状态，避免"接口返回 200 但任务未触发"的假成功。
+ *
+ * @param {Object} headers 请求头（签到接口 headers）
+ * @param {number} taskId 任务 ID
+ * @return {Promise<boolean>} true=任务已触发（status 0 或 1），false=未触发或查询失败
+ */
+async function verifyTaskTriggered(headers, taskId) {
+  try {
+    var taskList = await getTaskList(headers);
+    var task = findTask(taskList, taskId);
+    if (task && (task.status === 0 || task.status === 1)) {
+      return true;
+    }
+  } catch (e) {
+    // 查询失败时不阻断，返回 false
   }
-  var inviteCode = resp.json.invite_code || '';
-  if (!inviteCode) {
-    console.log('  [每日分享] 响应中未包含 invite_code: ' + JSON.stringify(resp.json).substring(0, 200));
-    return null;
-  }
-  return inviteCode;
+  return false;
 }
 
 // ============================================================
@@ -1523,7 +1552,6 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
   var task59Triggered = false;
   var task62Triggered = false;
   var task77Triggered = false;
-  var task77Code = '';
   var task59Score = 10;
   var task62Score = 10;
   var task77Score = 10;
@@ -1561,32 +1589,39 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
     // 步骤A：每日分享（触发 task 77，不需要 WAF Cookie）
     if (task77 && task77.status === 2) {
       console.log('');
-      console.log('  │ 📤 生成分享邀请...');
-      // 分享接口使用 PC UA + X-Platform: web，不需要 WAF Cookie
+      console.log('  │ 📤 上报分享行为...');
+      // 上报接口使用 PC UA + X-Platform: web，不需要 WAF Cookie
       var shareHeaders = {
         'Authorization': 'Bearer ' + accessToken,
         'Content-Type': 'application/json',
         'User-Agent': PC_USER_AGENT,
-        'Referer': PC_REFERER,
+        'Referer': 'https://gitcode.com/setting/points?type=invite',
         'Origin': GITCODE_SITE,
         'X-Platform': 'web',
+        'X-App-Channel': 'gitcode-fe',
+        'X-Device-Type': 'Windows',
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         'X-Username': auth.username || 'unknown',
       };
       try {
-        var inviteCode = await generateInvite(shareHeaders);
-        if (inviteCode) {
-          task77Triggered = true;
-          task77Code = inviteCode;
-          console.log('  邀请码: ' + inviteCode);
-            console.log('  │ 📤 分享已触发 (+' + task77Score + ' 积分)');
+        var shareOk = await reportShareClick(shareHeaders);
+        if (shareOk) {
+          // 等待服务端处理后重新验证任务状态（V4.3 新增，避免假成功）
+          await new Promise(function (resolve) { setTimeout(resolve, 1000); });
+          var verified = await verifyTaskTriggered(signHeaders, 77);
+          if (verified) {
+            task77Triggered = true;
+            console.log('  │ 📤 分享已触发 ✓ (+' + task77Score + ' 积分)');
+          } else {
+            console.log('  │ ⚠️ 分享上报成功但任务未触发（接口可能已变更）');
+          }
         }
       } catch (e) {
         console.log('  [每日分享] 请求异常: ' + e.message);
       }
     } else if (task77) {
-      console.log('[每日分享] task 77 状态为 ' + getTaskStatusText(task77.status) + '，跳过');
+      console.log('  │ 📤 每日分享: ' + getTaskStatusText(task77.status) + '，跳过');
     }
 
     // 等待 1 秒，让服务端处理
@@ -1614,8 +1649,15 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
             console.log('  项目: ' + projName);
             console.log('  描述: ' + projDesc);
             console.log('  Star数: ' + projStarCount + (projForksCount > 0 ? '  Fork数: ' + projForksCount : ''));
-            task59Triggered = true;
-            console.log('[查看项目] task 59 已触发（待领取 +' + task59Score + ' 积分）');
+            // 等待服务端处理后重新验证任务状态（V4.3 新增，避免假成功）
+            await new Promise(function (resolve) { setTimeout(resolve, 1000); });
+            var verified59 = await verifyTaskTriggered(signHeaders, 59);
+            if (verified59) {
+              task59Triggered = true;
+              console.log('  │ 🔍 查看热门已触发 ✓ (+' + task59Score + ' 积分)');
+            } else {
+              console.log('  │ ⚠️ 项目已查看但 task 59 未触发（触发接口可能已变更）');
+            }
           } else {
             console.log('  [查看项目] 获取项目详情失败');
           }
@@ -1660,8 +1702,15 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
             } else {
               console.log('  Star成功');
             }
-            task62Triggered = true;
-            console.log('[Star项目] task 62 已触发（待领取 +' + task62Score + ' 积分）');
+            // 等待服务端处理后重新验证任务状态（V4.3 新增，避免假成功）
+            await new Promise(function (resolve) { setTimeout(resolve, 1000); });
+            var verified62 = await verifyTaskTriggered(signHeaders, 62);
+            if (verified62) {
+              task62Triggered = true;
+              console.log('  │ ⭐ Star已触发 ✓ (+' + task62Score + ' 积分)');
+            } else {
+              console.log('  │ ⚠️ Star成功但 task 62 未触发（触发接口可能已变更）');
+            }
           } else {
             console.log('  [Star项目] Star 请求失败');
           }
@@ -2024,7 +2073,7 @@ function getRepos() {
  */
 async function main() {
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   GitCode 每日签到  V4.2            ║');
+  console.log('║   GitCode 每日签到  V4.3            ║');
   console.log('║   签到 + 刷新 + 分享/查看/Star + 更新 ║');
   console.log('║   ' + new Date().toLocaleString('zh-CN') + '          ║');
   console.log('╚══════════════════════════════════════╝');
