@@ -69,7 +69,7 @@
  *   30 8 * * *
  *
  * @author GitCode Check-in Bot
- * @version 4.3.0
+ * @version 4.3.1
  */
 
 // cron: 30 8 * * *
@@ -103,6 +103,9 @@ const API_TOKEN_REFRESH = '/uc/api/v1/user/token/refresh';
 /** 每日任务列表接口（小程序渠道） */
 const API_TASK_LIST =
   '/uc/api/v1/task/channel/miniprogram?channel=miniprogram&task_level=1';
+
+/** task 59 触发点候选：浏览保存接口（PC web 前端调用） */
+const API_BROWSE_SAVE = '/api/v1/search/browse/save';
 
 /** 领取所有奖励接口 */
 const API_CLAIM_ALL = '/uc/api/v1/task/claim-all';
@@ -1642,8 +1645,15 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
     // 等待 1 秒，让服务端处理
     await new Promise(function (resolve) { setTimeout(resolve, 1000); });
 
-    // 步骤B：每日查看热门项目（触发 task 59，V4.3 修复）
-    // 上报接口不需要 WAF Cookie，仅需 access_token。
+    // 步骤B：每日查看热门项目（触发 task 59，V4.3.1 修复）
+    // 关键发现：task 59 必须由真实用户行为触发。
+    //   - 抓包分析：用户从首页热门精选点项目时，前端调用 POST /api/v1/search/browse/save
+    //   - 抓包分析：用户停留 5+ 秒后，前端调用 POST /api/v1/report?event_id=page_stay
+    //   - 抓包分析：弹窗显示时，前端调用 POST /api/v1/report?event_id=browse_record_saved
+    //   - 抓包分析：弹窗展示时，POST /api/v1/report?event_id=browse_popup_shown
+    // 服务端通过多重行为上报+项目浏览计数+任务中心"去完成"按钮状态共同判定。
+    // 单纯 API 调用（含本修复）可能仍被识别为非人工操作，无法触发任务。
+    // 如果 task 59 未触发，**用户需在任务中心点击"去完成"后**浏览任意推荐项目。
     if (task59 && task59.status === 2) {
       console.log('');
       console.log('  │ 🔍 上报查看项目行为...');
@@ -1653,13 +1663,26 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
         'User-Agent': PC_USER_AGENT,
         'Referer': 'https://gitcode.com/',
         'Origin': GITCODE_SITE,
+        'X-Platform': 'web',
+        'X-Device-Type': 'Windows',
         'X-App-Channel': 'gitcode-fe',
         'page-uri': 'https%3A%2F%2Fgitcode.com%2FQQ111QQ%2Fcodex%3Fsource_module%3Dhome_hot_selection',
       };
       try {
-        var v1 = await postRequest(API_REPORT_VIEW, viewHeaders, { project_id: parseInt(projectId, 10) });
-        var v2 = await postRequest(API_PAGEVIEW, viewHeaders, {});
-        var viewOk = v1.statusCode === 200 || v2.statusCode === 200;
+        // 1. 上报 pageview（页面浏览，含 source_module 表明从首页来）
+        var v1 = await postRequest(API_PAGEVIEW, viewHeaders, {});
+        // 2. 上报 page_stay（停留时长，HAR 显示在 browse/save 前 ~5 秒）
+        var v2 = await postRequest('/api/v1/report?event_id=page_stay', viewHeaders, {});
+        // 3. 调 browse/save（核心触发点：保存浏览记录）
+        var v3 = await postRequest(API_BROWSE_SAVE, viewHeaders, { project_id: parseInt(projectId, 10), skip_popup: false });
+        // 4. 上报 browse_record_saved（带 project_id）
+        var v4 = await postRequest('/api/v1/report?event_id=browse_record_saved', viewHeaders, { project_id: parseInt(projectId, 10) });
+        // 5. 上报 browse_popup_shown（带 repo_id + repo_name）
+        var v5 = await postRequest('/api/v1/report?event_id=browse_popup_shown', viewHeaders, {
+          repo_id: parseInt(projectId, 10),
+          repo_name: 'QQ111QQ/codex'
+        });
+        var viewOk = [v1, v2, v3, v4, v5].some(function (r) { return r.statusCode === 200; });
         if (viewOk) {
           await new Promise(function (resolve) { setTimeout(resolve, 1500); });
           var verified59 = await verifyTaskTriggered(signHeaders, 59);
@@ -1667,8 +1690,11 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
             task59Triggered = true;
             console.log('  │ 🔍 查看热门已触发 ✓ (+' + task59Score + ' 积分)');
           } else {
-            console.log('  │ ⚠️ 上报成功但 task 59 未触发（触发接口可能已变更）');
+            console.log('  │ ⚠️ task 59 未触发（V4.3.1 已知限制）');
+            console.log('  │    task 59 需先在任务中心点击"去完成"，再浏览任意推荐项目');
           }
+        } else {
+          console.log('  │ ⚠️ task 59 上报接口全失败，跳过');
         }
       } catch (e) {
         console.log('  [查看项目] 上报异常: ' + e.message);
@@ -2062,7 +2088,7 @@ function getRepos() {
  */
 async function main() {
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   GitCode 每日签到  V4.3            ║');
+  console.log('║   GitCode 每日签到  V4.3.1          ║');
   console.log('║   签到 + 刷新 + 分享/查看/Star + 更新 ║');
   console.log('║   ' + new Date().toLocaleString('zh-CN') + '          ║');
   console.log('╚══════════════════════════════════════╝');
