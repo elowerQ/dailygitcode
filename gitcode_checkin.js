@@ -41,6 +41,12 @@
  *   - 新增触发后验证：每个任务动作执行后重新查询任务状态，
  *     只有服务端确认触发才报"已触发 ✓"，否则提示"未触发（接口可能已变更）"
  *
+ * V4.3.2 修复：
+ *   - task 59 改用 GET 项目页面方式触发（替代失败的 5 步 API 上报）
+ *   - 新增 visitHotProject() 函数，GET ai.gitcode.com/{owner}/{repo}?source_module=home_hot_selection
+ *   - 主理人验证：浏览器访问该 URL 能触发 task 59
+ *   - 脚本模拟 GET 页面（带完整 Cookie + PC UA），明天验证效果
+ *
  * 环境变量：
  *   GITCODE_COOKIE —— 支持以下格式（自动识别）：
  *     1. 完整 Cookie 字符串（推荐，支持每日任务 + 自动刷新）：
@@ -69,7 +75,7 @@
  *   30 8 * * *
  *
  * @author GitCode Check-in Bot
- * @version 4.3.1
+ * @version 4.3.2
  */
 
 // cron: 30 8 * * *
@@ -104,8 +110,14 @@ const API_TOKEN_REFRESH = '/uc/api/v1/user/token/refresh';
 const API_TASK_LIST =
   '/uc/api/v1/task/channel/miniprogram?channel=miniprogram&task_level=1';
 
-/** task 59 触发点候选：浏览保存接口（PC web 前端调用） */
-const API_BROWSE_SAVE = '/api/v1/search/browse/save';
+/** 热门项目页面访问接口主机名（ai.gitcode.com 子域，V4.3.2 新增） */
+const HOT_PROJECT_HOST = 'ai.gitcode.com';
+
+/** 默认热门项目路径（owner/repo 格式） */
+const HOT_PROJECT_PATH_DEFAULT = 'MiniMax-AI/MiniMax-H3';
+
+/** 热门精选来源参数（标识从首页热门精选进入项目页面） */
+const SOURCE_MODULE_PARAM = 'source_module=home_hot_selection';
 
 /** 领取所有奖励接口 */
 const API_CLAIM_ALL = '/uc/api/v1/task/claim-all';
@@ -118,10 +130,6 @@ const API_REPORT = '/api/v1/report?event_id=page_click';
 
 /** task 77 触发上报的按钮名（复制邀请链接） */
 const SHARE_BUTTON_NAME = '常规邀请_复制邀请链接_PC';
-
-/** task 59 触发上报的事件（V4.3 新增：记录项目浏览 + 页面浏览） */
-const API_REPORT_VIEW = '/api/v1/report?event_id=record_saved';
-const API_PAGEVIEW = '/api/v1/report?event_id=pageview';
 
 /** 项目接口基础路径（api/v2/projects/） */
 const API_PROJECTS_BASE = '/api/v2/projects/';
@@ -598,6 +606,32 @@ async function getRequest(path, headers) {
 }
 
 /**
+ * 发送 GET 请求到指定 hostname（支持自定义域名，用于非 web-api.gitcode.com 的请求）。
+ *
+ * 与 getRequest 的区别：getRequest 固定使用 BASE_URL（web-api.gitcode.com），
+ * 本函数允许指定任意 hostname（如 ai.gitcode.com），适用于 GET 项目页面等场景。
+ * 页面响应可能较大（~200KB），超时时间设为 20 秒。
+ *
+ * @param {string} hostname 目标主机名（如 'ai.gitcode.com'）
+ * @param {string} path 请求路径（含查询参数，如 '/MiniMax-AI/MiniMax-H3?source_module=home_hot_selection'）
+ * @param {Object} headers 请求头
+ * @return {Promise<{statusCode: number, json: Object|null, raw: string}>}
+ */
+async function getRequestCustomHost(hostname, path, headers) {
+  var url = 'https://' + hostname + path;
+  var resp = await httpRequest(url, 'GET', headers, null, 20000);
+  var json = null;
+  if (resp.data && resp.data.length > 0) {
+    try {
+      json = JSON.parse(resp.data);
+    } catch (e) {
+      // 非 JSON 响应（HTML 页面等），保持 json = null
+    }
+  }
+  return { statusCode: resp.statusCode, json: json, raw: resp.data };
+}
+
+/**
  * 发送 POST 请求（带 JSON 请求体）并解析 JSON 响应。
  *
  * @param {string} path API 路径
@@ -998,6 +1032,56 @@ async function viewProject(projectId, headers) {
     return null;
   }
   return resp.json;
+}
+
+/**
+ * GET 项目页面（模拟用户从首页热门精选点击进入项目）。
+ * 触发 task 59 "每日查看热门/推荐项目"。
+ *
+ * 接口：GET https://ai.gitcode.com/{owner}/{repo}?source_module=home_hot_selection
+ * 请求头：PC UA + Authorization + 完整 Cookie（含 WAF）+ Referer + Origin
+ *
+ * V4.3.2 修复：替代 V4.3.1 的 5 步 API 上报方案（pageview + browse/save 等），
+ * 该方案全部 HTTP 200 但 task 59 不触发。改用 GET 项目页面方式，
+ * 服务端在 SSR 阶段识别"带 source_module=home_hot_selection 参数的项目页访问 = 从首页热门精选进入"。
+ *
+ * WAF Cookie 缺失时仍尝试 GET（cookie 头只带 access_token 相关 cookie），可能也有效。
+ *
+ * @param {Object} headers 基础请求头（含 Authorization + PC UA）
+ * @param {string} cookieStr 完整 Cookie 串（含 WAF Cookie，WAF 缺失时带 access_token 相关 cookie）
+ * @param {string} hotProjectPath 热门项目路径（如 'MiniMax-AI/MiniMax-H3'）
+ * @return {Promise<boolean>} 是否成功访问（HTTP 200）
+ */
+async function visitHotProject(headers, cookieStr, hotProjectPath) {
+  // 拼接 URL 路径: /{owner}/{repo}?source_module=home_hot_selection
+  var path = '/' + hotProjectPath + '?' + SOURCE_MODULE_PARAM;
+
+  // 构建完整请求头（必须带完整 Cookie）
+  var fullHeaders = Object.assign({}, headers, {
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'zh-CN,zh;q=0.9',
+    'Cookie': cookieStr || '',
+    'Referer': GITCODE_SITE + '/',
+    'Upgrade-Insecure-Requests': '1',
+  });
+
+  // GET https://ai.gitcode.com/{path}
+  // 注意：这是 ai.gitcode.com 子域，不是 web-api.gitcode.com
+  var resp = await getRequestCustomHost(HOT_PROJECT_HOST, path, fullHeaders);
+
+  if (resp.statusCode === 200) {
+    // 检查响应里是否含 hot_selection 关键词（确认 SSR 识别了来源）
+    var hasHotSelection = resp.raw && resp.raw.indexOf('hot_selection') !== -1;
+    var rawLen = resp.raw ? resp.raw.length : 0;
+    console.log('  [查看项目] GET 页面成功（HTTP 200, ' + rawLen + ' bytes, hot_selection=' + hasHotSelection + ')');
+    return true;
+  } else {
+    console.log('  [查看项目] GET 页面失败，HTTP ' + resp.statusCode);
+    if (resp.raw && resp.raw.length > 0) {
+      console.log('  [查看项目] 响应内容: ' + resp.raw.substring(0, 200));
+    }
+    return false;
+  }
 }
 
 /**
@@ -1645,59 +1729,47 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
     // 等待 1 秒，让服务端处理
     await new Promise(function (resolve) { setTimeout(resolve, 1000); });
 
-    // 步骤B：每日查看热门项目（触发 task 59，V4.3.1 修复）
-    // 关键发现：task 59 必须由真实用户行为触发。
-    //   - 抓包分析：用户从首页热门精选点项目时，前端调用 POST /api/v1/search/browse/save
-    //   - 抓包分析：用户停留 5+ 秒后，前端调用 POST /api/v1/report?event_id=page_stay
-    //   - 抓包分析：弹窗显示时，前端调用 POST /api/v1/report?event_id=browse_record_saved
-    //   - 抓包分析：弹窗展示时，POST /api/v1/report?event_id=browse_popup_shown
-    // 服务端通过多重行为上报+项目浏览计数+任务中心"去完成"按钮状态共同判定。
-    // 单纯 API 调用（含本修复）可能仍被识别为非人工操作，无法触发任务。
-    // 如果 task 59 未触发，**用户需在任务中心点击"去完成"后**浏览任意推荐项目。
+    // 步骤B：每日查看热门项目（触发 task 59，V4.3.2 修复）
+    // V4.3.1 用 5 步 API 上报（pageview + browse/save 等）实测全部 HTTP 200 但不触发
+    // V4.3.2 改用 GET 项目页面方式（模拟用户从首页热门精选点击进入项目）
+    // 主理人验证：浏览器访问 ai.gitcode.com/{owner}/{repo}?source_module=home_hot_selection 能触发
+    // 服务端在 SSR 阶段识别"带 source_module=home_hot_selection 参数的访问 = 从首页热门精选进入"
     if (task59 && task59.status === 2) {
       console.log('');
-      console.log('  │ 🔍 上报查看项目行为...');
+      console.log('  │ 🔍 GET 热门项目页面...');
+      // 构建 PC UA 请求头（GET 页面用）
       var viewHeaders = {
         'Authorization': 'Bearer ' + accessToken,
-        'Content-Type': 'application/json',
         'User-Agent': PC_USER_AGENT,
-        'Referer': 'https://gitcode.com/',
         'Origin': GITCODE_SITE,
         'X-Platform': 'web',
-        'X-Device-Type': 'Windows',
         'X-App-Channel': 'gitcode-fe',
-        'page-uri': 'https%3A%2F%2Fgitcode.com%2FQQ111QQ%2Fcodex%3Fsource_module%3Dhome_hot_selection',
       };
       try {
-        // 1. 上报 pageview（页面浏览，含 source_module 表明从首页来）
-        var v1 = await postRequest(API_PAGEVIEW, viewHeaders, {});
-        // 2. 上报 page_stay（停留时长，HAR 显示在 browse/save 前 ~5 秒）
-        var v2 = await postRequest('/api/v1/report?event_id=page_stay', viewHeaders, {});
-        // 3. 调 browse/save（核心触发点：保存浏览记录）
-        var v3 = await postRequest(API_BROWSE_SAVE, viewHeaders, { project_id: parseInt(projectId, 10), skip_popup: false });
-        // 4. 上报 browse_record_saved（带 project_id）
-        var v4 = await postRequest('/api/v1/report?event_id=browse_record_saved', viewHeaders, { project_id: parseInt(projectId, 10) });
-        // 5. 上报 browse_popup_shown（带 repo_id + repo_name）
-        var v5 = await postRequest('/api/v1/report?event_id=browse_popup_shown', viewHeaders, {
-          repo_id: parseInt(projectId, 10),
-          repo_name: 'QQ111QQ/codex'
-        });
-        var viewOk = [v1, v2, v3, v4, v5].some(function (r) { return r.statusCode === 200; });
-        if (viewOk) {
-          await new Promise(function (resolve) { setTimeout(resolve, 1500); });
+        var visited = await visitHotProject(viewHeaders, cookieStr, HOT_PROJECT_PATH_DEFAULT);
+        if (visited) {
+          // 等待 3 秒让服务端处理
+          await new Promise(function (resolve) { setTimeout(resolve, 3000); });
+          // 验证 task 59 是否触发
           var verified59 = await verifyTaskTriggered(signHeaders, 59);
           if (verified59) {
             task59Triggered = true;
             console.log('  │ 🔍 查看热门已触发 ✓ (+' + task59Score + ' 积分)');
           } else {
-            console.log('  │ ⚠️ task 59 未触发（V4.3.1 已知限制）');
-            console.log('  │    task 59 需先在任务中心点击"去完成"，再浏览任意推荐项目');
+            console.log('  │ ⚠️ 页面访问成功但 task 59 未触发');
+            if (!wafAvailable) {
+              console.log('  │    可能原因: WAF Cookie 缺失，服务端识别非真实浏览器');
+            } else {
+              console.log('  │    可能原因: WAF Cookie 过期 / 服务端识别非真实浏览器');
+            }
+            console.log('  │    建议: 在任务中心点击"去完成"后浏览任意推荐项目');
           }
-        } else {
-          console.log('  │ ⚠️ task 59 上报接口全失败，跳过');
         }
       } catch (e) {
-        console.log('  [查看项目] 上报异常: ' + e.message);
+        console.log('  [查看项目] GET 页面异常: ' + e.message);
+        if (e.message && e.message.indexOf('WAF') !== -1) {
+          console.log('  [查看项目] 可能是 WAF Cookie 已过期');
+        }
       }
     } else if (task59) {
       console.log('  │ 🔍 查看热门: ' + getTaskStatusText(task59.status) + '，跳过');
@@ -1766,7 +1838,8 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
   if (!wafAvailable) {
     console.log('[每日任务] 未检测到 WAF Cookie（HWWAFSESID 等），跳过 Star 项目（task 62）');
     console.log('[每日任务] 提示: Star项目 需要完整 Cookie 串（含 WAF Cookie）');
-    console.log('[每日任务]       分享（task 77）、查看热门（task 59）、文件更新和领取奖励不受影响');
+    console.log('[每日任务]       分享（task 77）、文件更新和领取奖励不受影响');
+    console.log('[每日任务]       查看热门（task 59）仍尝试 GET 页面，但可能需要 WAF Cookie');
   }
 
   // 步骤C（V4新增）：更新项目文件（不需要 WAF Cookie）
@@ -2088,7 +2161,7 @@ function getRepos() {
  */
 async function main() {
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   GitCode 每日签到  V4.3.1          ║');
+  console.log('║   GitCode 每日签到  V4.3.2          ║');
   console.log('║   签到 + 刷新 + 分享/查看/Star + 更新 ║');
   console.log('║   ' + new Date().toLocaleString('zh-CN') + '          ║');
   console.log('╚══════════════════════════════════════╝');
