@@ -1756,13 +1756,7 @@ async function processDailyTasks(auth, accessToken, signHeaders, projectId, repo
             task59Triggered = true;
             console.log('  │ 🔍 查看热门已触发 ✓ (+' + task59Score + ' 积分)');
           } else {
-            console.log('  │ ⚠️ 页面访问成功但 task 59 未触发');
-            if (!wafAvailable) {
-              console.log('  │    可能原因: WAF Cookie 缺失，服务端识别非真实浏览器');
-            } else {
-              console.log('  │    可能原因: WAF Cookie 过期 / 服务端识别非真实浏览器');
-            }
-            console.log('  │    建议: 在任务中心点击"去完成"后浏览任意推荐项目');
+            console.log('  │ ⚠️ 查看热门: 需手动完成（任务中心点"去完成"+浏览推荐项目）');
           }
         }
       } catch (e) {
